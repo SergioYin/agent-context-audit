@@ -4,7 +4,7 @@ import json
 import os
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 from . import __version__
 
@@ -293,6 +293,238 @@ def render_markdown(result: AuditResult) -> str:
 
 def render_json(result: AuditResult, context_pack_path: str | None = None) -> str:
     return json.dumps(result.to_json_dict(context_pack_path), ensure_ascii=False, indent=2)
+
+
+def load_json_report(path: str | Path) -> dict[str, Any]:
+    report_path = Path(path)
+    try:
+        data = json.loads(report_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Malformed JSON report {report_path}: {exc.msg}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"JSON report must be an object: {report_path}")
+    return data
+
+
+def _number(value: Any) -> int | float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    return None
+
+
+def _score(data: dict[str, Any]) -> int | float | None:
+    for key in ("overall_score", "score"):
+        value = _number(data.get(key))
+        if value is not None:
+            return value
+    summary = data.get("summary")
+    if isinstance(summary, dict):
+        return _number(summary.get("score"))
+    return None
+
+
+def _file_path(item: dict[str, Any]) -> str | None:
+    for key in ("path", "file", "filename", "name"):
+        value = item.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _file_score(value: Any) -> int | float | None:
+    if isinstance(value, dict):
+        return _score(value)
+    return _number(value)
+
+
+def _file_scores(data: dict[str, Any]) -> dict[str, int | float]:
+    files: dict[str, int | float] = {}
+    source = data.get("files")
+    if source is None:
+        source = data.get("file_reports")
+
+    if isinstance(source, dict):
+        for path, value in source.items():
+            score = _file_score(value)
+            if isinstance(path, str) and score is not None:
+                files[path] = score
+    elif isinstance(source, list):
+        for item in source:
+            if not isinstance(item, dict):
+                continue
+            path = _file_path(item)
+            score = _file_score(item)
+            if path and score is not None:
+                files[path] = score
+    return files
+
+
+def _rule_count_value(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, list):
+        return len(value)
+    return None
+
+
+def _rule_key(item: dict[str, Any]) -> str:
+    for key in ("rule", "rule_id", "category", "code", "name", "severity"):
+        value = item.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return "uncategorized"
+
+
+def _rule_issue_counts(data: dict[str, Any]) -> dict[str, int]:
+    explicit = data.get("rule_issues")
+    if isinstance(explicit, dict):
+        counts = {}
+        for key, value in explicit.items():
+            count = _rule_count_value(value)
+            if isinstance(key, str) and count is not None:
+                counts[key] = count
+        return counts
+
+    rules = data.get("rules")
+    if isinstance(rules, list):
+        counts = {}
+        for item in rules:
+            if not isinstance(item, dict):
+                continue
+            count = None
+            for key in ("issue_count", "issues_count", "count"):
+                count = _rule_count_value(item.get(key))
+                if count is not None:
+                    break
+            if count is None:
+                count = _rule_count_value(item.get("issues"))
+            if count is not None:
+                counts[_rule_key(item)] = count
+        if counts:
+            return counts
+
+    findings = data.get("findings")
+    if isinstance(findings, list):
+        counts: dict[str, int] = {}
+        for item in findings:
+            if isinstance(item, dict):
+                key = _rule_key(item)
+            else:
+                key = "uncategorized"
+            counts[key] = counts.get(key, 0) + 1
+        return counts
+
+    categories = data.get("categories")
+    if isinstance(categories, list):
+        counts = {}
+        for category in categories:
+            if not isinstance(category, dict):
+                continue
+            name = str(category.get("name") or "uncategorized")
+            checks = category.get("checks")
+            if isinstance(checks, list):
+                failed = sum(1 for check in checks if isinstance(check, dict) and check.get("passed") is False)
+                if failed:
+                    counts[name] = failed
+            else:
+                score = _number(category.get("score"))
+                max_score = _number(category.get("max_score"))
+                if score is not None and max_score is not None and score < max_score:
+                    counts[name] = 1
+        return counts
+
+    return {}
+
+
+def compare_reports(
+    baseline: dict[str, Any],
+    current: dict[str, Any],
+    baseline_path: str | None = None,
+    current_path: str | None = None,
+) -> dict[str, Any]:
+    baseline_score = _score(baseline)
+    current_score = _score(current)
+    score_delta = None
+    if baseline_score is not None and current_score is not None:
+        score_delta = current_score - baseline_score
+
+    baseline_files = _file_scores(baseline)
+    current_files = _file_scores(current)
+    baseline_paths = set(baseline_files)
+    current_paths = set(current_files)
+    added_files = sorted(current_paths - baseline_paths)
+    removed_files = sorted(baseline_paths - current_paths)
+    improved = []
+    regressed = []
+    for path in sorted(baseline_paths & current_paths):
+        old = baseline_files[path]
+        new = current_files[path]
+        delta = new - old
+        if delta > 0:
+            improved.append({"path": path, "baseline_score": old, "current_score": new, "delta": delta})
+        elif delta < 0:
+            regressed.append({"path": path, "baseline_score": old, "current_score": new, "delta": delta})
+
+    baseline_rules = _rule_issue_counts(baseline)
+    current_rules = _rule_issue_counts(current)
+    rule_names = sorted(set(baseline_rules) | set(current_rules))
+    by_rule = {
+        name: {
+            "baseline": baseline_rules.get(name, 0),
+            "current": current_rules.get(name, 0),
+            "delta": current_rules.get(name, 0) - baseline_rules.get(name, 0),
+        }
+        for name in rule_names
+    }
+
+    return {
+        "tool": {"name": TOOL_NAME, "version": __version__},
+        "comparison": {"baseline": baseline_path, "current": current_path},
+        "baseline": {"score": baseline_score},
+        "current": {"score": current_score},
+        "score_delta": score_delta,
+        "changed_file_count": len(added_files) + len(removed_files) + len(improved) + len(regressed),
+        "added_file_count": len(added_files),
+        "removed_file_count": len(removed_files),
+        "added_files": added_files,
+        "removed_files": removed_files,
+        "files_improved": improved,
+        "files_regressed": regressed,
+        "rule_issue_count_deltas": {
+            "baseline_total": sum(baseline_rules.values()),
+            "current_total": sum(current_rules.values()),
+            "delta": sum(current_rules.values()) - sum(baseline_rules.values()),
+            "by_rule": by_rule,
+        },
+    }
+
+
+def render_compare_json(comparison: dict[str, Any]) -> str:
+    return json.dumps(comparison, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def render_compare_text(comparison: dict[str, Any]) -> str:
+    baseline_score = comparison["baseline"]["score"]
+    current_score = comparison["current"]["score"]
+    score_delta = comparison["score_delta"]
+    rules = comparison["rule_issue_count_deltas"]
+    lines = [
+        "Agent Context Audit Comparison",
+        f"Score: {baseline_score} -> {current_score} (delta: {score_delta})",
+        (
+            "Files: "
+            f"{comparison['changed_file_count']} changed, "
+            f"{comparison['added_file_count']} added, "
+            f"{comparison['removed_file_count']} removed"
+        ),
+        f"File scores: {len(comparison['files_improved'])} improved, {len(comparison['files_regressed'])} regressed",
+        f"Rule issues: {rules['baseline_total']} -> {rules['current_total']} (delta: {rules['delta']})",
+    ]
+    return "\n".join(lines)
 
 
 def build_context_pack(root: str | Path, max_bytes: int = 24000) -> str:

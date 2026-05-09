@@ -4,7 +4,16 @@ import argparse
 import sys
 from pathlib import Path
 
-from .scanner import audit, build_context_pack, render_json, render_markdown
+from .scanner import (
+    audit,
+    build_context_pack,
+    compare_reports,
+    load_json_report,
+    render_compare_json,
+    render_compare_text,
+    render_json,
+    render_markdown,
+)
 
 
 def cmd_audit(args: argparse.Namespace) -> int:
@@ -22,6 +31,19 @@ def cmd_pack(args: argparse.Namespace) -> int:
     output = build_context_pack(args.path, max_bytes=args.max_bytes)
     Path(args.out).write_text(output, encoding="utf-8")
     print(f"Wrote agent context pack: {args.out}")
+    return 0
+
+
+def cmd_compare(args: argparse.Namespace) -> int:
+    baseline = load_json_report(args.baseline)
+    current = load_json_report(args.current)
+    comparison = compare_reports(baseline, current, args.baseline, args.current)
+    output = render_compare_text(comparison) if args.format == "text" else render_compare_json(comparison)
+    if args.write:
+        Path(args.write).write_text(output, encoding="utf-8")
+        print(f"Wrote comparison report: {args.write}")
+    else:
+        print(output)
     return 0
 
 
@@ -44,6 +66,13 @@ def build_parser() -> argparse.ArgumentParser:
     pack_p.add_argument("--out", default="AGENT_CONTEXT.md", help="Output markdown file")
     pack_p.add_argument("--max-bytes", type=int, default=24000, help="Maximum output size in bytes")
     pack_p.set_defaults(func=cmd_pack)
+
+    compare_p = sub.add_parser("compare", help="Compare two JSON audit reports")
+    compare_p.add_argument("baseline", help="Baseline JSON report")
+    compare_p.add_argument("current", help="Current JSON report")
+    compare_p.add_argument("--format", choices=["json", "text"], default="json")
+    compare_p.add_argument("--write", help="Write output to a file instead of stdout")
+    compare_p.set_defaults(func=cmd_compare)
     return parser
 
 

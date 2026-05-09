@@ -93,6 +93,20 @@ Write JSON for an asset dashboard or local automation:
 python -m agent_context_audit audit . --format json --write /tmp/agent-context-audit.json
 ```
 
+Compare two JSON audit reports:
+
+```bash
+python -m agent_context_audit compare /tmp/baseline.json /tmp/current.json
+```
+
+The `compare` command prints deterministic JSON by default for automation. It includes baseline/current scores when present, score delta, added/removed/changed file counts, files improved or regressed by score, and rule issue count deltas when the reports include findings, categories, rules, or `rule_issues`.
+
+For a concise human-readable summary:
+
+```bash
+python -m agent_context_audit compare /tmp/baseline.json /tmp/current.json --format text
+```
+
 Read the score from JSON in a script or shell pipeline:
 
 ```bash
@@ -100,6 +114,8 @@ python -c "import json,sys; print(json.load(open(sys.argv[1]))['overall_score'])
 ```
 
 Useful stable JSON keys include `tool`, `scanned_root`, `overall_score`, `grade`, `status`, `categories`, `findings`, `recommendations`, `generated_context_pack_path`, `counts`, and `summary`.
+
+Useful stable comparison keys include `baseline`, `current`, `score_delta`, `changed_file_count`, `added_file_count`, `removed_file_count`, `added_files`, `removed_files`, `files_improved`, `files_regressed`, and `rule_issue_count_deltas`.
 
 ## Example output
 
@@ -137,6 +153,8 @@ Run self-check on this repo:
 ```bash
 python -m agent_context_audit audit . --write /tmp/agent-context-audit-report.md
 python -m agent_context_audit pack . --out /tmp/AGENT_CONTEXT.md
+python -m agent_context_audit audit . --format json --write /tmp/agent-context-audit-current.json
+python -m agent_context_audit compare /tmp/agent-context-audit-current.json /tmp/agent-context-audit-current.json
 ```
 
 ## License

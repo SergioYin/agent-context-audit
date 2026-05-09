@@ -1,7 +1,7 @@
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 
@@ -20,6 +20,11 @@ class AgentContextAuditTests(unittest.TestCase):
         (root / "tests").mkdir()
         (root / "examples").mkdir()
         return temp, root
+
+    def write_report(self, root, name, data):
+        path = root / name
+        path.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
+        return path
 
     def test_audit_scores_expected_signals(self):
         temp, root = self.make_repo()
@@ -106,6 +111,108 @@ class AgentContextAuditTests(unittest.TestCase):
         self.assertIn("# AGENT_CONTEXT", pack)
         self.assertIn("README.md", pack)
         self.assertIn("Detected commands", pack)
+
+    def test_compare_reports_normal_improvement_case(self):
+        temp = tempfile.TemporaryDirectory()
+        root = Path(temp.name)
+        self.addCleanup(temp.cleanup)
+        baseline = self.write_report(root, "baseline.json", {
+            "overall_score": 70,
+            "files": [
+                {"path": "README.md", "score": 60},
+                {"path": "AGENTS.md", "score": 70},
+            ],
+            "rule_issues": {"missing_context": 2, "stale_docs": 1},
+        })
+        current = self.write_report(root, "current.json", {
+            "overall_score": 82,
+            "files": [
+                {"path": "README.md", "score": 80},
+                {"path": "AGENTS.md", "score": 70},
+            ],
+            "rule_issues": {"missing_context": 1, "stale_docs": 0},
+        })
+        stdout = StringIO()
+
+        with redirect_stdout(stdout):
+            code = main(["compare", str(baseline), str(current)])
+
+        data = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(data["baseline"]["score"], 70)
+        self.assertEqual(data["current"]["score"], 82)
+        self.assertEqual(data["score_delta"], 12)
+        self.assertEqual(data["changed_file_count"], 1)
+        self.assertEqual(data["files_improved"][0]["path"], "README.md")
+        self.assertEqual(data["rule_issue_count_deltas"]["delta"], -2)
+        self.assertEqual(data["rule_issue_count_deltas"]["by_rule"]["missing_context"]["delta"], -1)
+
+    def test_compare_reports_regression_text_case(self):
+        temp = tempfile.TemporaryDirectory()
+        root = Path(temp.name)
+        self.addCleanup(temp.cleanup)
+        baseline = self.write_report(root, "baseline.json", {
+            "summary": {"score": 88},
+            "files": {"README.md": {"overall_score": 90}},
+            "findings": [{"category": "docs"}],
+        })
+        current = self.write_report(root, "current.json", {
+            "summary": {"score": 75},
+            "files": {"README.md": {"overall_score": 70}},
+            "findings": [{"category": "docs"}, {"category": "tests"}],
+        })
+        stdout = StringIO()
+
+        with redirect_stdout(stdout):
+            code = main(["compare", str(baseline), str(current), "--format", "text"])
+
+        output = stdout.getvalue()
+        self.assertEqual(code, 0)
+        self.assertIn("Score: 88 -> 75 (delta: -13)", output)
+        self.assertIn("File scores: 0 improved, 1 regressed", output)
+        self.assertIn("Rule issues: 1 -> 2 (delta: 1)", output)
+
+    def test_compare_reports_added_and_removed_files(self):
+        temp = tempfile.TemporaryDirectory()
+        root = Path(temp.name)
+        self.addCleanup(temp.cleanup)
+        baseline = self.write_report(root, "baseline.json", {
+            "score": 50,
+            "files": {"old.md": 40, "same.md": 50},
+        })
+        current = self.write_report(root, "current.json", {
+            "score": 50,
+            "files": {"new.md": 60, "same.md": 50},
+        })
+        stdout = StringIO()
+
+        with redirect_stdout(stdout):
+            code = main(["compare", str(baseline), str(current)])
+
+        data = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(data["changed_file_count"], 2)
+        self.assertEqual(data["added_file_count"], 1)
+        self.assertEqual(data["removed_file_count"], 1)
+        self.assertEqual(data["added_files"], ["new.md"])
+        self.assertEqual(data["removed_files"], ["old.md"])
+
+    def test_compare_reports_malformed_input_handling(self):
+        temp = tempfile.TemporaryDirectory()
+        root = Path(temp.name)
+        self.addCleanup(temp.cleanup)
+        bad = root / "bad.json"
+        bad.write_text("{not json", encoding="utf-8")
+        current = self.write_report(root, "current.json", {"overall_score": 80})
+        stdout = StringIO()
+        stderr = StringIO()
+
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            code = main(["compare", str(bad), str(current)])
+
+        self.assertEqual(code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("Malformed JSON report", stderr.getvalue())
 
 
 if __name__ == "__main__":
