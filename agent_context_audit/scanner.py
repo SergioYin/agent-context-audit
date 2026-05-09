@@ -6,6 +6,10 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Iterable
 
+from . import __version__
+
+TOOL_NAME = "agent-context-audit"
+
 IGNORE_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build",
     ".pytest_cache", ".mypy_cache", ".ruff_cache", "coverage", ".next", "target"
@@ -76,6 +80,71 @@ class AuditResult:
 
     def to_dict(self) -> dict:
         data = asdict(self)
+        return data
+
+    def to_json_dict(self, context_pack_path: str | None = None) -> dict:
+        categories = []
+        passed = 0
+        for signal in self.signals:
+            category_score = signal.weight if signal.found else 0
+            if signal.found:
+                passed += 1
+            categories.append({
+                "name": signal.name,
+                "score": category_score,
+                "max_score": signal.weight,
+                "checks": [{
+                    "name": signal.name,
+                    "passed": signal.found,
+                    "evidence": signal.matches,
+                    "recommendation": "" if signal.found else signal.fix,
+                }],
+            })
+
+        total = len(self.signals)
+        failed = total - passed
+        recommendations = list(self.top_fixes)
+        findings = []
+        for warning in self.warnings:
+            findings.append({"severity": "warning", "message": warning})
+        for signal in self.signals:
+            if not signal.found:
+                findings.append({
+                    "severity": "recommendation",
+                    "message": signal.fix,
+                    "category": signal.name,
+                })
+
+        data = self.to_dict()
+        data.update({
+            "tool": {"name": TOOL_NAME, "version": __version__},
+            "tool_name": TOOL_NAME,
+            "tool_version": __version__,
+            "scanned_root": self.root,
+            "overall_score": self.score,
+            "grade": self.grade,
+            "status": self.grade,
+            "categories": categories,
+            "findings": findings,
+            "recommendations": recommendations,
+            "generated_context_pack_path": context_pack_path,
+            "counts": {
+                "categories_total": total,
+                "categories_passed": passed,
+                "categories_failed": failed,
+                "warnings": len(self.warnings),
+                "findings": len(findings),
+                "recommendations": len(recommendations),
+                "detected_commands": len(self.commands),
+            },
+            "summary": {
+                "score": self.score,
+                "grade": self.grade,
+                "categories_passed": passed,
+                "categories_total": total,
+                "warnings": len(self.warnings),
+            },
+        })
         return data
 
 
@@ -222,8 +291,8 @@ def render_markdown(result: AuditResult) -> str:
     return "\n".join(lines)
 
 
-def render_json(result: AuditResult) -> str:
-    return json.dumps(result.to_dict(), ensure_ascii=False, indent=2)
+def render_json(result: AuditResult, context_pack_path: str | None = None) -> str:
+    return json.dumps(result.to_json_dict(context_pack_path), ensure_ascii=False, indent=2)
 
 
 def build_context_pack(root: str | Path, max_bytes: int = 24000) -> str:

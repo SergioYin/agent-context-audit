@@ -85,6 +85,22 @@ Machine-readable output:
 python -m agent_context_audit audit . --format json
 ```
 
+The default `audit` output remains human-readable text; `--format markdown` is also supported for the original spelling.
+
+Write JSON for an asset dashboard or local automation:
+
+```bash
+python -m agent_context_audit audit . --format json --write /tmp/agent-context-audit.json
+```
+
+Read the score from JSON in a script or shell pipeline:
+
+```bash
+python -c "import json,sys; print(json.load(open(sys.argv[1]))['overall_score'])" /tmp/agent-context-audit.json
+```
+
+Useful stable JSON keys include `tool`, `scanned_root`, `overall_score`, `grade`, `status`, `categories`, `findings`, `recommendations`, `generated_context_pack_path`, `counts`, and `summary`.
+
 ## Example output
 
 ```text

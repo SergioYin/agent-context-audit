@@ -34,7 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     audit_p = sub.add_parser("audit", help="Score a repository for AI-agent context readiness")
     audit_p.add_argument("path", nargs="?", default=".", help="Repository path to scan")
-    audit_p.add_argument("--format", choices=["markdown", "json"], default="markdown")
+    audit_p.add_argument("--format", choices=["text", "markdown", "json"], default="text")
     audit_p.add_argument("--write", help="Write output to a file instead of stdout")
     audit_p.add_argument("--min-score", type=int, default=0, help="Exit 2 if score is below this threshold")
     audit_p.set_defaults(func=cmd_audit)
