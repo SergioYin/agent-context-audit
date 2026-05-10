@@ -93,6 +93,14 @@ Write JSON for an asset dashboard or local automation:
 python -m agent_context_audit audit . --format json --write /tmp/agent-context-audit.json
 ```
 
+Suppress known findings from a previous audit while keeping the current score and new findings visible:
+
+```bash
+python -m agent_context_audit audit . --format json --baseline /tmp/agent-context-audit.json
+```
+
+With `--baseline`, repeated findings are moved to `suppressed_findings`, current-only findings remain in `findings`, and text output reports new versus suppressed issue counts. A malformed baseline JSON fails clearly with a non-zero exit.
+
 Compare two JSON audit reports:
 
 ```bash
@@ -113,7 +121,7 @@ Read the score from JSON in a script or shell pipeline:
 python -c "import json,sys; print(json.load(open(sys.argv[1]))['overall_score'])" /tmp/agent-context-audit.json
 ```
 
-Useful stable JSON keys include `tool`, `scanned_root`, `overall_score`, `grade`, `status`, `categories`, `findings`, `recommendations`, `generated_context_pack_path`, `counts`, and `summary`.
+Useful stable JSON keys include `tool`, `scanned_root`, `overall_score`, `grade`, `status`, `categories`, `findings`, `recommendations`, `generated_context_pack_path`, `counts`, and `summary`. When `--baseline` is supplied, output also includes `baseline` and `suppressed_findings`; `baseline` contains `baseline_path`, `suppressed_count`, `new_issue_count`, and per-file counts when findings include paths.
 
 Useful stable comparison keys include `baseline`, `current`, `score_delta`, `changed_file_count`, `added_file_count`, `removed_file_count`, `added_files`, `removed_files`, `files_improved`, `files_regressed`, and `rule_issue_count_deltas`.
 
@@ -154,6 +162,7 @@ Run self-check on this repo:
 python -m agent_context_audit audit . --write /tmp/agent-context-audit-report.md
 python -m agent_context_audit pack . --out /tmp/AGENT_CONTEXT.md
 python -m agent_context_audit audit . --format json --write /tmp/agent-context-audit-current.json
+python -m agent_context_audit audit . --format json --baseline /tmp/agent-context-audit-current.json
 python -m agent_context_audit compare /tmp/agent-context-audit-current.json /tmp/agent-context-audit-current.json
 ```
 

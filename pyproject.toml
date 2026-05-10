@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-context-audit"
-version = "0.1.2"
+version = "0.1.3"
 description = "Audit a repository for AI coding-agent readiness and generate a compact context pack."
 readme = "README.md"
 requires-python = ">=3.9"

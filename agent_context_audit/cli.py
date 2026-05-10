@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from .scanner import (
+    apply_baseline_suppression,
     audit,
     build_context_pack,
     compare_reports,
@@ -12,13 +13,20 @@ from .scanner import (
     render_compare_json,
     render_compare_text,
     render_json,
+    render_json_report,
     render_markdown,
+    render_markdown_report,
 )
 
 
 def cmd_audit(args: argparse.Namespace) -> int:
     result = audit(args.path)
-    output = render_json(result) if args.format == "json" else render_markdown(result)
+    if args.baseline:
+        baseline = load_json_report(args.baseline)
+        report = apply_baseline_suppression(result.to_json_dict(), baseline, args.baseline)
+        output = render_json_report(report) if args.format == "json" else render_markdown_report(report)
+    else:
+        output = render_json(result) if args.format == "json" else render_markdown(result)
     if args.write:
         Path(args.write).write_text(output, encoding="utf-8")
         print(f"Wrote audit report: {args.write}")
@@ -59,6 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
     audit_p.add_argument("--format", choices=["text", "markdown", "json"], default="text")
     audit_p.add_argument("--write", help="Write output to a file instead of stdout")
     audit_p.add_argument("--min-score", type=int, default=0, help="Exit 2 if score is below this threshold")
+    audit_p.add_argument("--baseline", help="Suppress findings already present in a previous audit JSON report")
     audit_p.set_defaults(func=cmd_audit)
 
     pack_p = sub.add_parser("pack", help="Generate a compact AGENT_CONTEXT.md briefing")

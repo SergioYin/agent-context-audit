@@ -103,6 +103,94 @@ class AgentContextAuditTests(unittest.TestCase):
         self.assertEqual(data["tool_name"], "agent-context-audit")
         self.assertEqual(data["scanned_root"], str(root.resolve()))
         self.assertEqual(data["summary"]["score"], data["overall_score"])
+        self.assertNotIn("baseline", data)
+
+    def test_cli_baseline_suppresses_repeated_findings(self):
+        temp, root = self.make_repo()
+        self.addCleanup(temp.cleanup)
+        baseline = self.write_report(root, "baseline.json", json.loads(render_json(audit(root))))
+        stdout = StringIO()
+
+        with redirect_stdout(stdout):
+            code = main(["audit", str(root), "--format", "json", "--baseline", str(baseline)])
+
+        data = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(data["baseline"]["baseline_path"], str(baseline))
+        self.assertGreater(data["baseline"]["suppressed_count"], 0)
+        self.assertEqual(data["baseline"]["new_issue_count"], 0)
+        self.assertEqual(data["findings"], [])
+        self.assertTrue(all(item["suppressed"] for item in data["suppressed_findings"]))
+        self.assertEqual(data["overall_score"], audit(root).score)
+
+    def test_cli_baseline_keeps_new_findings_visible(self):
+        temp, root = self.make_repo()
+        self.addCleanup(temp.cleanup)
+        baseline = self.write_report(root, "baseline.json", {
+            "findings": [
+                {
+                    "severity": "recommendation",
+                    "message": "Add CI so agent-created changes get repeatable feedback.",
+                    "category": "ci",
+                }
+            ]
+        })
+        stdout = StringIO()
+
+        with redirect_stdout(stdout):
+            code = main(["audit", str(root), "--format", "json", "--baseline", str(baseline)])
+
+        data = json.loads(stdout.getvalue())
+        messages = {item["message"] for item in data["findings"]}
+        self.assertEqual(code, 0)
+        self.assertEqual(data["baseline"]["suppressed_count"], 1)
+        self.assertGreater(data["baseline"]["new_issue_count"], 0)
+        self.assertNotIn("Add CI so agent-created changes get repeatable feedback.", messages)
+        self.assertIn("Add CONTRIBUTING.md with PR, review, and local setup expectations.", messages)
+
+    def test_cli_baseline_text_reports_new_and_suppressed_counts(self):
+        temp, root = self.make_repo()
+        self.addCleanup(temp.cleanup)
+        baseline = self.write_report(root, "baseline.json", json.loads(render_json(audit(root))))
+        stdout = StringIO()
+
+        with redirect_stdout(stdout):
+            code = main(["audit", str(root), "--baseline", str(baseline)])
+
+        output = stdout.getvalue()
+        self.assertEqual(code, 0)
+        self.assertIn("## Baseline", output)
+        self.assertIn("New issues: 0", output)
+        self.assertIn("Suppressed known issues:", output)
+
+    def test_cli_baseline_malformed_input_handling(self):
+        temp, root = self.make_repo()
+        self.addCleanup(temp.cleanup)
+        bad = root / "bad-baseline.json"
+        bad.write_text("{not json", encoding="utf-8")
+        stdout = StringIO()
+        stderr = StringIO()
+
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            code = main(["audit", str(root), "--format", "json", "--baseline", str(bad)])
+
+        self.assertEqual(code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("Malformed JSON report", stderr.getvalue())
+
+    def test_cli_baseline_invalid_shape_handling(self):
+        temp, root = self.make_repo()
+        self.addCleanup(temp.cleanup)
+        invalid = self.write_report(root, "invalid-baseline.json", {"overall_score": 50})
+        stdout = StringIO()
+        stderr = StringIO()
+
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            code = main(["audit", str(root), "--format", "json", "--baseline", str(invalid)])
+
+        self.assertEqual(code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("Baseline audit report does not contain a findings list", stderr.getvalue())
 
     def test_context_pack_contains_tree_and_excerpt(self):
         temp, root = self.make_repo()

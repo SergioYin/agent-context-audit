@@ -266,33 +266,176 @@ def tree(root: Path, max_entries: int = 120) -> list[str]:
 
 
 def render_markdown(result: AuditResult) -> str:
+    return render_markdown_report(result.to_json_dict())
+
+
+def render_markdown_report(report: dict[str, Any]) -> str:
+    signals = []
+    for signal in report.get("signals", []):
+        if isinstance(signal, dict):
+            signals.append(signal)
+    warnings = [str(w) for w in report.get("warnings", [])]
+    top_fixes = [str(fix) for fix in report.get("top_fixes", [])]
+    baseline = report.get("baseline")
+
     lines = [
         f"# Agent Context Readiness Report",
         "",
-        f"Repository: `{result.root}`",
-        f"Score: **{result.score}/100 ({result.grade})**",
+        f"Repository: `{report.get('root', report.get('scanned_root', ''))}`",
+        f"Score: **{report.get('score', report.get('overall_score'))}/100 ({report.get('grade')})**",
         "",
         "## Signals",
         "",
         "| Signal | Status | Weight | Evidence |",
         "|---|---:|---:|---|",
     ]
-    for s in result.signals:
-        status = "✅" if s.found else "❌"
-        evidence = ", ".join(s.matches) if s.matches else s.fix
-        lines.append(f"| {s.name} | {status} | {s.weight} | {evidence} |")
-    if result.commands:
-        lines += ["", "## Detected commands", ""] + [f"- `{c}`" for c in result.commands]
-    if result.warnings:
-        lines += ["", "## Warnings", ""] + [f"- {w}" for w in result.warnings]
-    if result.top_fixes:
-        lines += ["", "## Top fixes", ""] + [f"{i}. {fix}" for i, fix in enumerate(result.top_fixes, 1)]
+    for signal in signals:
+        status = "✅" if signal.get("found") else "❌"
+        matches = signal.get("matches")
+        evidence = ", ".join(str(item) for item in matches) if isinstance(matches, list) and matches else signal.get("fix", "")
+        lines.append(f"| {signal.get('name')} | {status} | {signal.get('weight')} | {evidence} |")
+    if report.get("commands"):
+        lines += ["", "## Detected commands", ""] + [f"- `{c}`" for c in report["commands"]]
+    if baseline:
+        lines += [
+            "",
+            "## Baseline",
+            "",
+            f"- Baseline: `{baseline.get('baseline_path')}`",
+            f"- New issues: {baseline.get('new_issue_count', 0)}",
+            f"- Suppressed known issues: {baseline.get('suppressed_count', 0)}",
+        ]
+    if warnings:
+        lines += ["", "## Warnings", ""] + [f"- {w}" for w in warnings]
+    if top_fixes:
+        lines += ["", "## Top fixes", ""] + [f"{i}. {fix}" for i, fix in enumerate(top_fixes, 1)]
     lines.append("")
     return "\n".join(lines)
 
 
 def render_json(result: AuditResult, context_pack_path: str | None = None) -> str:
     return json.dumps(result.to_json_dict(context_pack_path), ensure_ascii=False, indent=2)
+
+
+def render_json_report(report: dict[str, Any]) -> str:
+    return json.dumps(report, ensure_ascii=False, indent=2)
+
+
+def _finding_path(item: dict[str, Any]) -> str:
+    for key in ("path", "file", "filename"):
+        value = item.get(key)
+        if isinstance(value, str) and value:
+            return value
+    location = item.get("location")
+    if isinstance(location, dict):
+        value = location.get("path") or location.get("file")
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def _finding_rule(item: dict[str, Any]) -> str:
+    for key in ("rule_id", "rule", "category", "code", "name", "severity"):
+        value = item.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def _finding_identity(item: dict[str, Any]) -> str:
+    for key in ("message", "category"):
+        value = item.get(key)
+        if isinstance(value, str) and value:
+            return value
+    line = item.get("line")
+    if isinstance(line, int):
+        return f"line:{line}"
+    location = item.get("location")
+    if isinstance(location, dict):
+        line = location.get("line")
+        if isinstance(line, int):
+            return f"line:{line}"
+    return ""
+
+
+def _finding_signature(item: dict[str, Any]) -> tuple[str, str, str]:
+    return (_finding_rule(item), _finding_path(item), _finding_identity(item))
+
+
+def _finding_signatures(report: dict[str, Any]) -> set[tuple[str, str, str]]:
+    findings = report.get("findings")
+    if not isinstance(findings, list):
+        return set()
+    signatures = set()
+    for item in findings:
+        if isinstance(item, dict):
+            signatures.add(_finding_signature(item))
+    return signatures
+
+
+def _baseline_files_summary(suppressed: list[dict[str, Any]], visible: list[dict[str, Any]]) -> dict[str, dict[str, int | bool]]:
+    paths = sorted({_finding_path(item) for item in suppressed + visible if _finding_path(item)})
+    summary: dict[str, dict[str, int | bool]] = {}
+    for path in paths:
+        suppressed_count = sum(1 for item in suppressed if _finding_path(item) == path)
+        new_count = sum(1 for item in visible if _finding_path(item) == path)
+        summary[path] = {
+            "has_suppressed": suppressed_count > 0,
+            "suppressed_count": suppressed_count,
+            "new_issue_count": new_count,
+        }
+    return summary
+
+
+def apply_baseline_suppression(
+    current: dict[str, Any],
+    baseline: dict[str, Any],
+    baseline_path: str | Path,
+) -> dict[str, Any]:
+    findings = current.get("findings")
+    if not isinstance(findings, list):
+        raise ValueError("Current audit report does not contain a findings list")
+    if not isinstance(baseline.get("findings"), list):
+        raise ValueError(f"Baseline audit report does not contain a findings list: {baseline_path}")
+
+    baseline_signatures = _finding_signatures(baseline)
+    visible: list[dict[str, Any]] = []
+    suppressed: list[dict[str, Any]] = []
+    for item in findings:
+        if not isinstance(item, dict):
+            visible.append({"severity": "warning", "message": str(item)})
+            continue
+        if _finding_signature(item) in baseline_signatures:
+            marked = dict(item)
+            marked["suppressed"] = True
+            suppressed.append(marked)
+        else:
+            marked = dict(item)
+            marked["suppressed"] = False
+            visible.append(marked)
+
+    output = dict(current)
+    output["findings"] = visible
+    output["suppressed_findings"] = suppressed
+    output["baseline"] = {
+        "baseline_path": str(baseline_path),
+        "suppressed_count": len(suppressed),
+        "new_issue_count": len(visible),
+        "files": _baseline_files_summary(suppressed, visible),
+    }
+    suppressed_messages = {item.get("message") for item in suppressed}
+    output["warnings"] = [warning for warning in output.get("warnings", []) if warning not in suppressed_messages]
+    output["top_fixes"] = [fix for fix in output.get("top_fixes", []) if fix not in suppressed_messages]
+    output["recommendations"] = [fix for fix in output.get("recommendations", []) if fix not in suppressed_messages]
+
+    counts = dict(output.get("counts", {}))
+    counts["findings"] = len(visible)
+    counts["warnings"] = len(output["warnings"])
+    counts["recommendations"] = len(output["recommendations"])
+    counts["suppressed_findings"] = len(suppressed)
+    counts["new_findings"] = len(visible)
+    output["counts"] = counts
+    return output
 
 
 def load_json_report(path: str | Path) -> dict[str, Any]:
