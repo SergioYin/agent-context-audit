@@ -69,6 +69,17 @@ class Signal:
     fix: str
 
 @dataclass
+class FileScore:
+    path: str
+    score: int
+    max_score: int
+    size_bytes: int
+    text: bool
+    matched_signals: list[str]
+    strengths: list[str]
+    issues: list[str]
+
+@dataclass
 class AuditResult:
     root: str
     score: int
@@ -77,6 +88,7 @@ class AuditResult:
     warnings: list[str]
     commands: list[str]
     top_fixes: list[str]
+    files: list[FileScore]
 
     def to_dict(self) -> dict:
         data = asdict(self)
@@ -132,6 +144,7 @@ class AuditResult:
                 "categories_total": total,
                 "categories_passed": passed,
                 "categories_failed": failed,
+                "files_scored": len(self.files),
                 "warnings": len(self.warnings),
                 "findings": len(findings),
                 "recommendations": len(recommendations),
@@ -142,8 +155,10 @@ class AuditResult:
                 "grade": self.grade,
                 "categories_passed": passed,
                 "categories_total": total,
+                "files_scored": len(self.files),
                 "warnings": len(self.warnings),
             },
+            "file_summary": file_summary(self.files),
         })
         return data
 
@@ -169,6 +184,113 @@ def exists_signal(root: Path, candidates: list[str]) -> list[str]:
         if p.exists():
             found.append(candidate)
     return found
+
+
+def matched_file_signals(path: str) -> list[str]:
+    matches: list[str] = []
+    for name, candidates in SIGNALS.items():
+        for candidate in candidates:
+            if path == candidate or path.startswith(candidate.rstrip("/") + "/"):
+                matches.append(name)
+                break
+    return matches
+
+
+def score_file(path: Path, root: Path) -> FileScore:
+    r = rel(path, root)
+    size = 0
+    try:
+        size = path.stat().st_size
+    except OSError:
+        pass
+
+    signals = matched_file_signals(r)
+    text = bool(safe_read(path, 12000))
+    lower_path = r.lower()
+    content = safe_read(path, 12000).lower() if text else ""
+    strengths: list[str] = []
+    issues: list[str] = []
+    score = 0
+
+    if signals:
+        score += 30
+        strengths.append("matches repository readiness signal: " + ", ".join(signals))
+    else:
+        issues.append("does not match a readiness signal")
+
+    if text:
+        score += 20
+        strengths.append("readable text file")
+    else:
+        issues.append("binary or unsupported text type")
+
+    if size == 0:
+        issues.append("empty file")
+    elif size >= 200:
+        score += 20
+        strengths.append("substantive size")
+    else:
+        score += 10
+        issues.append("very small file")
+
+    content_markers = {
+        "commands": ("test", "lint", "build", "run", "install", "usage", "setup"),
+        "conventions": ("style", "convention", "architecture", "design", "boundary", "adr"),
+        "guardrails": ("security", "secret", "review", "forbidden", "must", "avoid"),
+    }
+    marker_hits = []
+    for label, terms in content_markers.items():
+        if any(term in content for term in terms):
+            marker_hits.append(label)
+    if marker_hits:
+        score += min(20, len(marker_hits) * 8)
+        strengths.append("mentions " + ", ".join(marker_hits))
+    elif text:
+        issues.append("no obvious commands, conventions, or guardrails")
+
+    if any(pattern in lower_path for pattern in SECRET_PATTERNS):
+        issues.append("suspicious secret-bearing filename")
+        score = max(0, score - 25)
+
+    if lower_path.endswith((".lock", "lock.json", "lock.yaml")):
+        score = min(score, 80)
+        issues.append("machine-generated or lockfile context")
+
+    return FileScore(
+        path=r,
+        score=min(score, 100),
+        max_score=100,
+        size_bytes=size,
+        text=text,
+        matched_signals=signals,
+        strengths=strengths,
+        issues=issues,
+    )
+
+
+def score_files(root: Path) -> list[FileScore]:
+    files = [path for path in iter_paths(root) if path.is_file()]
+    scored = [score_file(path, root) for path in sorted(files, key=lambda p: rel(p, root))]
+    return scored
+
+
+def file_summary(files: list[FileScore]) -> dict[str, Any]:
+    if not files:
+        return {
+            "scored": 0,
+            "average_score": None,
+            "top_files": [],
+            "low_scoring_files": [],
+        }
+    ordered_top = sorted(files, key=lambda item: (-item.score, item.path))[:5]
+    ordered_low = sorted(files, key=lambda item: (item.score, item.path))[:5]
+    average = round(sum(item.score for item in files) / len(files), 1)
+    return {
+        "scored": len(files),
+        "average_score": average,
+        "top_files": [{"path": item.path, "score": item.score} for item in ordered_top],
+        "low_scoring_files": [{"path": item.path, "score": item.score} for item in ordered_low],
+    }
 
 
 def detect_commands(root: Path) -> list[str]:
@@ -238,9 +360,10 @@ def audit(root: str | Path) -> AuditResult:
         warnings.append("Possible secret-bearing files found: " + ", ".join(suspicious[:8]))
 
     commands = detect_commands(root)
+    files = score_files(root)
     missing = [s for s in signals if not s.found]
     top_fixes = [s.fix for s in sorted(missing, key=lambda s: s.weight, reverse=True)[:5]]
-    return AuditResult(str(root), min(score, 100), grade(min(score, 100)), signals, warnings, commands, top_fixes)
+    return AuditResult(str(root), min(score, 100), grade(min(score, 100)), signals, warnings, commands, top_fixes, files)
 
 
 def safe_read(path: Path, max_chars: int = 4000) -> str:
@@ -296,6 +419,23 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         lines.append(f"| {signal.get('name')} | {status} | {signal.get('weight')} | {evidence} |")
     if report.get("commands"):
         lines += ["", "## Detected commands", ""] + [f"- `{c}`" for c in report["commands"]]
+    file_info = report.get("file_summary")
+    if isinstance(file_info, dict) and file_info.get("scored", 0):
+        lines += [
+            "",
+            "## File scores",
+            "",
+            f"- Files scored: {file_info.get('scored')}",
+            f"- Average file score: {file_info.get('average_score')}/100",
+        ]
+        top_files = file_info.get("top_files")
+        if isinstance(top_files, list) and top_files:
+            lines += ["", "Top files:"]
+            lines += [f"- `{item.get('path')}`: {item.get('score')}/100" for item in top_files if isinstance(item, dict)]
+        low_files = file_info.get("low_scoring_files")
+        if isinstance(low_files, list) and low_files:
+            lines += ["", "Low-scoring files:"]
+            lines += [f"- `{item.get('path')}`: {item.get('score')}/100" for item in low_files if isinstance(item, dict)]
     if baseline:
         lines += [
             "",

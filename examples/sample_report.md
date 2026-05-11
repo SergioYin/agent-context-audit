@@ -23,6 +23,21 @@ Score: **72/100 (B)**
 
 - `python -m unittest discover -s tests -v`
 
+## File scores
+
+- Files scored: 6
+- Average file score: 62.5/100
+
+Top files:
+- `README.md`: 86/100
+- `pyproject.toml`: 70/100
+- `tests/test_app.py`: 70/100
+
+Low-scoring files:
+- `src/app.py`: 30/100
+- `LICENSE`: 60/100
+- `examples/demo.json`: 60/100
+
 ## Top fixes
 
 1. Add AGENTS.md/CLAUDE.md with coding style, test commands, and guardrails.

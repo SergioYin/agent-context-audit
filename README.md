@@ -25,7 +25,7 @@ It checks for:
 Then it can generate:
 
 - a Markdown readiness report
-- JSON output for automation
+- JSON output for automation, including native per-file scores
 - a compact `AGENT_CONTEXT.md` bundle with tree, detected commands, key excerpts, and suggested next edits
 
 
@@ -85,7 +85,7 @@ Machine-readable output:
 python -m agent_context_audit audit . --format json
 ```
 
-The default `audit` output remains human-readable text; `--format markdown` is also supported for the original spelling.
+The default `audit` output remains human-readable text and includes a concise file-score summary; `--format markdown` is also supported for the original spelling.
 
 Write JSON for an asset dashboard or local automation:
 
@@ -121,7 +121,7 @@ Read the score from JSON in a script or shell pipeline:
 python -c "import json,sys; print(json.load(open(sys.argv[1]))['overall_score'])" /tmp/agent-context-audit.json
 ```
 
-Useful stable JSON keys include `tool`, `scanned_root`, `overall_score`, `grade`, `status`, `categories`, `findings`, `recommendations`, `generated_context_pack_path`, `counts`, and `summary`. When `--baseline` is supplied, output also includes `baseline` and `suppressed_findings`; `baseline` contains `baseline_path`, `suppressed_count`, `new_issue_count`, and per-file counts when findings include paths.
+Useful stable JSON keys include `tool`, `scanned_root`, `overall_score`, `grade`, `status`, `categories`, `files`, `file_summary`, `findings`, `recommendations`, `generated_context_pack_path`, `counts`, and `summary`. Each `files` entry includes `path`, `score`, `max_score`, `size_bytes`, `text`, `matched_signals`, `strengths`, and `issues`, making the output suitable for compare tools, dashboards, and trend storage. When `--baseline` is supplied, output also includes `baseline` and `suppressed_findings`; `baseline` contains `baseline_path`, `suppressed_count`, `new_issue_count`, and per-file counts when findings include paths.
 
 Useful stable comparison keys include `baseline`, `current`, `score_delta`, `changed_file_count`, `added_file_count`, `removed_file_count`, `added_files`, `removed_files`, `files_improved`, `files_regressed`, and `rule_issue_count_deltas`.
 
@@ -134,6 +134,11 @@ Top fixes:
 1. Add AGENTS.md with repo-specific coding, test, and style instructions.
 2. Document the default test command in README or pyproject/package scripts.
 3. Add architecture notes for the main modules.
+
+File scores:
+- README.md: 86/100
+- pyproject.toml: 70/100
+- src/app.py: 30/100
 ```
 
 See [`examples/sample_report.md`](examples/sample_report.md) for a longer sample.

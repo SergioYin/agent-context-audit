@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.4 - 2026-05-11
+
+- Added native per-file scoring to audit JSON reports under `files`, with `file_summary` rollups for dashboards and compare inputs.
+- Added text/Markdown audit output for top and low-scoring files.
+- Kept repository-level scoring unchanged while exposing file-level strengths, issues, matched readiness signals, size, and text status.
+- Updated tests, README automation keys, and self-check expectations for richer real-project inputs.
+
 ## 0.1.3 - 2026-05-11
 
 - Added `audit --baseline PATH` to suppress repeated findings from a previous JSON audit report while keeping scores unchanged.

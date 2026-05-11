@@ -58,11 +58,31 @@ class AgentContextAuditTests(unittest.TestCase):
         self.assertEqual(data["grade"], result.grade)
         self.assertEqual(data["generated_context_pack_path"], "AGENT_CONTEXT.md")
         self.assertEqual(data["counts"]["categories_total"], len(result.signals))
+        self.assertEqual(data["counts"]["files_scored"], len(result.files))
         self.assertGreater(data["counts"]["categories_passed"], 0)
         self.assertIsInstance(data["categories"], list)
+        self.assertIsInstance(data["files"], list)
+        self.assertIsInstance(data["file_summary"], dict)
         self.assertIsInstance(data["findings"], list)
         self.assertIsInstance(data["recommendations"], list)
         self.assertIn("checks", data["categories"][0])
+
+    def test_audit_emits_native_per_file_scores(self):
+        temp, root = self.make_repo()
+        self.addCleanup(temp.cleanup)
+        (root / "src.py").write_text("print('hello')\n", encoding="utf-8")
+        result = audit(root)
+        data = json.loads(render_json(result))
+
+        by_path = {item["path"]: item for item in data["files"]}
+        self.assertIn("README.md", by_path)
+        self.assertIn("src.py", by_path)
+        self.assertEqual(by_path["README.md"]["max_score"], 100)
+        self.assertIn("readme", by_path["README.md"]["matched_signals"])
+        self.assertIsInstance(by_path["README.md"]["strengths"], list)
+        self.assertIsInstance(by_path["src.py"]["issues"], list)
+        self.assertEqual(data["file_summary"]["scored"], len(data["files"]))
+        self.assertGreaterEqual(data["file_summary"]["average_score"], 0)
 
     def test_cli_default_output_remains_markdown(self):
         temp, root = self.make_repo()
@@ -76,6 +96,7 @@ class AgentContextAuditTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("# Agent Context Readiness Report", output)
         self.assertIn("## Signals", output)
+        self.assertIn("## File scores", output)
         with self.assertRaises(json.JSONDecodeError):
             json.loads(output)
 
@@ -103,6 +124,8 @@ class AgentContextAuditTests(unittest.TestCase):
         self.assertEqual(data["tool_name"], "agent-context-audit")
         self.assertEqual(data["scanned_root"], str(root.resolve()))
         self.assertEqual(data["summary"]["score"], data["overall_score"])
+        self.assertIn("files", data)
+        self.assertIn("file_summary", data)
         self.assertNotIn("baseline", data)
 
     def test_cli_baseline_suppresses_repeated_findings(self):
@@ -284,6 +307,27 @@ class AgentContextAuditTests(unittest.TestCase):
         self.assertEqual(data["removed_file_count"], 1)
         self.assertEqual(data["added_files"], ["new.md"])
         self.assertEqual(data["removed_files"], ["old.md"])
+
+    def test_compare_reports_consumes_native_audit_file_scores(self):
+        temp, root = self.make_repo()
+        self.addCleanup(temp.cleanup)
+        baseline_data = json.loads(render_json(audit(root)))
+        (root / "ARCHITECTURE.md").write_text(
+            "# Architecture\n\nDesign boundaries and test commands live here.\n",
+            encoding="utf-8",
+        )
+        current_data = json.loads(render_json(audit(root)))
+        baseline = self.write_report(root, "baseline.json", baseline_data)
+        current = self.write_report(root, "current.json", current_data)
+        stdout = StringIO()
+
+        with redirect_stdout(stdout):
+            code = main(["compare", str(baseline), str(current)])
+
+        data = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertIn("ARCHITECTURE.md", data["added_files"])
+        self.assertEqual(data["added_file_count"], 1)
 
     def test_compare_reports_malformed_input_handling(self):
         temp = tempfile.TemporaryDirectory()
