@@ -346,6 +346,63 @@ class AgentContextAuditTests(unittest.TestCase):
         self.assertEqual(stdout.getvalue(), "")
         self.assertIn("Malformed JSON report", stderr.getvalue())
 
+    def test_export_dashboard_json_from_audit_report(self):
+        temp, root = self.make_repo()
+        self.addCleanup(temp.cleanup)
+        (root / "src.py").write_text("print('hello')\n", encoding="utf-8")
+        report = self.write_report(root, "audit.json", json.loads(render_json(audit(root))))
+        stdout = StringIO()
+
+        with redirect_stdout(stdout):
+            code = main(["export-dashboard", str(report), "--issue-limit", "3", "--file-limit", "2"])
+
+        data = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(data["dashboard_schema"], "agent-context-audit.dashboard.v1")
+        self.assertEqual(data["source"]["path"], str(report))
+        self.assertEqual(data["source"]["scanned_root"], str(root.resolve()))
+        self.assertEqual(data["score"]["value"], audit(root).score)
+        self.assertIn(data["score"]["band"]["name"], {"excellent", "strong", "usable", "thin", "critical"})
+        self.assertLessEqual(len(data["top_issues"]), 3)
+        self.assertLessEqual(len(data["files"]["top"]), 2)
+        self.assertLessEqual(len(data["files"]["attention"]), 2)
+        self.assertEqual(data["verification"]["input_format"], "agent-context-audit-json")
+        self.assertTrue(data["verification"]["deterministic"])
+        self.assertTrue(data["verification"]["generated_without_network"])
+
+    def test_export_dashboard_markdown_from_audit_report(self):
+        temp, root = self.make_repo()
+        self.addCleanup(temp.cleanup)
+        report = self.write_report(root, "audit.json", json.loads(render_json(audit(root))))
+        stdout = StringIO()
+
+        with redirect_stdout(stdout):
+            code = main(["export-dashboard", str(report), "--format", "markdown"])
+
+        output = stdout.getvalue()
+        self.assertEqual(code, 0)
+        self.assertIn("# Agent Context Dashboard", output)
+        self.assertIn("## Top issues", output)
+        self.assertIn("## File highlights", output)
+        self.assertIn("## Verification", output)
+        self.assertIn(str(report), output)
+
+    def test_export_dashboard_malformed_input_handling(self):
+        temp = tempfile.TemporaryDirectory()
+        root = Path(temp.name)
+        self.addCleanup(temp.cleanup)
+        bad = root / "bad.json"
+        bad.write_text("{not json", encoding="utf-8")
+        stdout = StringIO()
+        stderr = StringIO()
+
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            code = main(["export-dashboard", str(bad)])
+
+        self.assertEqual(code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("Malformed JSON report", stderr.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

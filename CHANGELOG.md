@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.5 - 2026-05-11
+
+- Added `export-dashboard` to convert saved audit JSON into compact dashboard-ready JSON or Markdown.
+- Added score-band metadata, ranked top issues, top/attention file highlights, and deterministic verification metadata.
+- Added tests for dashboard JSON, Markdown, and malformed input handling.
+- Updated README usage and self-check commands for the new export path.
+
 ## 0.1.4 - 2026-05-11
 
 - Added native per-file scoring to audit JSON reports under `files`, with `file_summary` rollups for dashboards and compare inputs.

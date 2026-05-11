@@ -4,7 +4,7 @@ import json
 import os
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional, Union
 
 from . import __version__
 
@@ -94,7 +94,7 @@ class AuditResult:
         data = asdict(self)
         return data
 
-    def to_json_dict(self, context_pack_path: str | None = None) -> dict:
+    def to_json_dict(self, context_pack_path: Optional[str] = None) -> dict:
         categories = []
         passed = 0
         for signal in self.signals:
@@ -334,7 +334,7 @@ def grade(score: int) -> str:
     return "F"
 
 
-def audit(root: str | Path) -> AuditResult:
+def audit(root: Union[str, Path]) -> AuditResult:
     root = Path(root).resolve()
     if not root.exists() or not root.is_dir():
         raise FileNotFoundError(f"Repository path does not exist or is not a directory: {root}")
@@ -453,7 +453,7 @@ def render_markdown_report(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def render_json(result: AuditResult, context_pack_path: str | None = None) -> str:
+def render_json(result: AuditResult, context_pack_path: Optional[str] = None) -> str:
     return json.dumps(result.to_json_dict(context_pack_path), ensure_ascii=False, indent=2)
 
 
@@ -513,9 +513,9 @@ def _finding_signatures(report: dict[str, Any]) -> set[tuple[str, str, str]]:
     return signatures
 
 
-def _baseline_files_summary(suppressed: list[dict[str, Any]], visible: list[dict[str, Any]]) -> dict[str, dict[str, int | bool]]:
+def _baseline_files_summary(suppressed: list[dict[str, Any]], visible: list[dict[str, Any]]) -> dict[str, dict[str, Union[int, bool]]]:
     paths = sorted({_finding_path(item) for item in suppressed + visible if _finding_path(item)})
-    summary: dict[str, dict[str, int | bool]] = {}
+    summary: dict[str, dict[str, Union[int, bool]]] = {}
     for path in paths:
         suppressed_count = sum(1 for item in suppressed if _finding_path(item) == path)
         new_count = sum(1 for item in visible if _finding_path(item) == path)
@@ -530,7 +530,7 @@ def _baseline_files_summary(suppressed: list[dict[str, Any]], visible: list[dict
 def apply_baseline_suppression(
     current: dict[str, Any],
     baseline: dict[str, Any],
-    baseline_path: str | Path,
+    baseline_path: Union[str, Path],
 ) -> dict[str, Any]:
     findings = current.get("findings")
     if not isinstance(findings, list):
@@ -578,7 +578,7 @@ def apply_baseline_suppression(
     return output
 
 
-def load_json_report(path: str | Path) -> dict[str, Any]:
+def load_json_report(path: Union[str, Path]) -> dict[str, Any]:
     report_path = Path(path)
     try:
         data = json.loads(report_path.read_text(encoding="utf-8"))
@@ -589,7 +589,7 @@ def load_json_report(path: str | Path) -> dict[str, Any]:
     return data
 
 
-def _number(value: Any) -> int | float | None:
+def _number(value: Any) -> Optional[Union[int, float]]:
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
@@ -597,7 +597,7 @@ def _number(value: Any) -> int | float | None:
     return None
 
 
-def _score(data: dict[str, Any]) -> int | float | None:
+def _score(data: dict[str, Any]) -> Optional[Union[int, float]]:
     for key in ("overall_score", "score"):
         value = _number(data.get(key))
         if value is not None:
@@ -608,7 +608,7 @@ def _score(data: dict[str, Any]) -> int | float | None:
     return None
 
 
-def _file_path(item: dict[str, Any]) -> str | None:
+def _file_path(item: dict[str, Any]) -> Optional[str]:
     for key in ("path", "file", "filename", "name"):
         value = item.get(key)
         if isinstance(value, str) and value:
@@ -616,14 +616,14 @@ def _file_path(item: dict[str, Any]) -> str | None:
     return None
 
 
-def _file_score(value: Any) -> int | float | None:
+def _file_score(value: Any) -> Optional[Union[int, float]]:
     if isinstance(value, dict):
         return _score(value)
     return _number(value)
 
 
-def _file_scores(data: dict[str, Any]) -> dict[str, int | float]:
-    files: dict[str, int | float] = {}
+def _file_scores(data: dict[str, Any]) -> dict[str, Union[int, float]]:
+    files: dict[str, Union[int, float]] = {}
     source = data.get("files")
     if source is None:
         source = data.get("file_reports")
@@ -644,7 +644,7 @@ def _file_scores(data: dict[str, Any]) -> dict[str, int | float]:
     return files
 
 
-def _rule_count_value(value: Any) -> int | None:
+def _rule_count_value(value: Any) -> Optional[int]:
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
@@ -726,8 +726,8 @@ def _rule_issue_counts(data: dict[str, Any]) -> dict[str, int]:
 def compare_reports(
     baseline: dict[str, Any],
     current: dict[str, Any],
-    baseline_path: str | None = None,
-    current_path: str | None = None,
+    baseline_path: Optional[str] = None,
+    current_path: Optional[str] = None,
 ) -> dict[str, Any]:
     baseline_score = _score(baseline)
     current_score = _score(current)
@@ -810,7 +810,242 @@ def render_compare_text(comparison: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def build_context_pack(root: str | Path, max_bytes: int = 24000) -> str:
+def score_band(score: Optional[Union[int, float]]) -> dict[str, Any]:
+    if score is None:
+        return {
+            "name": "unknown",
+            "min_score": None,
+            "max_score": None,
+            "label": "Unknown",
+            "priority": "unknown",
+        }
+    if score >= 90:
+        return {"name": "excellent", "min_score": 90, "max_score": 100, "label": "Excellent", "priority": "maintain"}
+    if score >= 75:
+        return {"name": "strong", "min_score": 75, "max_score": 89, "label": "Strong", "priority": "monitor"}
+    if score >= 60:
+        return {"name": "usable", "min_score": 60, "max_score": 74, "label": "Usable", "priority": "improve"}
+    if score >= 40:
+        return {"name": "thin", "min_score": 40, "max_score": 59, "label": "Thin", "priority": "fix-soon"}
+    return {"name": "critical", "min_score": 0, "max_score": 39, "label": "Critical", "priority": "fix-first"}
+
+
+def _string_list(value: Any, limit: int) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value[:limit]]
+
+
+def _compact_issue(item: dict[str, Any], index: int) -> dict[str, Any]:
+    message = str(item.get("message") or item.get("title") or item.get("name") or "Unnamed issue")
+    issue: dict[str, Any] = {
+        "rank": index,
+        "severity": str(item.get("severity") or "info"),
+        "message": message,
+    }
+    for key in ("category", "rule", "rule_id"):
+        value = item.get(key)
+        if isinstance(value, str) and value:
+            issue[key] = value
+            break
+    path = _finding_path(item)
+    if path:
+        issue["path"] = path
+    return issue
+
+
+def _dashboard_issues(report: dict[str, Any], limit: int) -> list[dict[str, Any]]:
+    findings = report.get("findings")
+    issues: list[dict[str, Any]] = []
+    seen_messages: set[str] = set()
+    if isinstance(findings, list):
+        for item in findings:
+            if isinstance(item, dict):
+                issue = _compact_issue(item, len(issues) + 1)
+            else:
+                issue = {"rank": len(issues) + 1, "severity": "info", "message": str(item)}
+            message = str(issue.get("message"))
+            if message in seen_messages:
+                continue
+            seen_messages.add(message)
+            issues.append(issue)
+            if len(issues) >= limit:
+                return issues
+
+    for fix in _string_list(report.get("top_fixes"), limit - len(issues)):
+        if fix in seen_messages:
+            continue
+        seen_messages.add(fix)
+        issues.append({"rank": len(issues) + 1, "severity": "recommendation", "message": fix})
+        if len(issues) >= limit:
+            break
+    return issues
+
+
+def _files_by_path(report: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    files = report.get("files")
+    by_path: dict[str, dict[str, Any]] = {}
+    if isinstance(files, list):
+        for item in files:
+            if not isinstance(item, dict):
+                continue
+            path = _file_path(item)
+            if path:
+                by_path[path] = item
+    return by_path
+
+
+def _compact_file_highlight(item: dict[str, Any], role: str) -> dict[str, Any]:
+    score = _file_score(item)
+    output: dict[str, Any] = {
+        "path": str(item.get("path") or item.get("file") or item.get("filename") or item.get("name") or ""),
+        "score": score,
+        "band": score_band(score)["name"],
+        "role": role,
+    }
+    signals = item.get("matched_signals")
+    if isinstance(signals, list) and signals:
+        output["matched_signals"] = [str(signal) for signal in signals[:3]]
+    strengths = _string_list(item.get("strengths"), 2)
+    issues = _string_list(item.get("issues"), 2)
+    if strengths:
+        output["strengths"] = strengths
+    if issues:
+        output["issues"] = issues
+    return output
+
+
+def _dashboard_files(report: dict[str, Any], limit: int) -> dict[str, Any]:
+    by_path = _files_by_path(report)
+    scored = _file_scores(report)
+    top = sorted(scored.items(), key=lambda item: (-item[1], item[0]))[:limit]
+    attention = sorted(scored.items(), key=lambda item: (item[1], item[0]))[:limit]
+
+    def expand(rows: list[tuple[str, Union[int, float]]], role: str) -> list[dict[str, Any]]:
+        highlights = []
+        for path, score in rows:
+            item = by_path.get(path, {"path": path, "score": score})
+            highlights.append(_compact_file_highlight(item, role))
+        return highlights
+
+    summary = report.get("file_summary") if isinstance(report.get("file_summary"), dict) else {}
+    return {
+        "scored": len(scored),
+        "average_score": summary.get("average_score"),
+        "top": expand(top, "strength"),
+        "attention": expand(attention, "attention"),
+    }
+
+
+def export_dashboard_report(
+    report: dict[str, Any],
+    source_path: Optional[Union[str, Path]] = None,
+    issue_limit: int = 5,
+    file_limit: int = 5,
+) -> dict[str, Any]:
+    issue_limit = max(0, issue_limit)
+    file_limit = max(0, file_limit)
+    score = _score(report)
+    grade_value = report.get("grade") or report.get("status")
+    counts = report.get("counts") if isinstance(report.get("counts"), dict) else {}
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    tool = report.get("tool") if isinstance(report.get("tool"), dict) else {}
+
+    return {
+        "tool": {"name": TOOL_NAME, "version": __version__},
+        "dashboard_schema": "agent-context-audit.dashboard.v1",
+        "source": {
+            "path": str(source_path) if source_path is not None else None,
+            "scanned_root": report.get("scanned_root") or report.get("root"),
+            "tool_name": tool.get("name") or report.get("tool_name"),
+            "tool_version": tool.get("version") or report.get("tool_version"),
+        },
+        "score": {
+            "value": score,
+            "grade": grade_value,
+            "band": score_band(score),
+        },
+        "top_issues": _dashboard_issues(report, issue_limit),
+        "files": _dashboard_files(report, file_limit),
+        "verification": {
+            "deterministic": True,
+            "generated_without_network": True,
+            "input_format": "agent-context-audit-json",
+            "categories_total": counts.get("categories_total", summary.get("categories_total")),
+            "categories_passed": counts.get("categories_passed", summary.get("categories_passed")),
+            "findings": counts.get("findings"),
+            "warnings": counts.get("warnings"),
+            "recommendations": counts.get("recommendations"),
+            "suppressed_findings": counts.get("suppressed_findings", 0),
+            "detected_commands": counts.get("detected_commands"),
+        },
+    }
+
+
+def render_dashboard_json(dashboard: dict[str, Any]) -> str:
+    return json.dumps(dashboard, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def render_dashboard_markdown(dashboard: dict[str, Any]) -> str:
+    score = dashboard.get("score", {})
+    band = score.get("band") if isinstance(score, dict) else {}
+    source = dashboard.get("source", {})
+    verification = dashboard.get("verification", {})
+    files = dashboard.get("files", {})
+
+    lines = [
+        "# Agent Context Dashboard",
+        "",
+        f"Source report: `{source.get('path')}`",
+        f"Repository: `{source.get('scanned_root')}`",
+        f"Score: **{score.get('value')}/100 ({score.get('grade')})**",
+        f"Band: **{band.get('label')}** (`{band.get('name')}`, priority: `{band.get('priority')}`)",
+        "",
+        "## Top issues",
+        "",
+    ]
+    issues = dashboard.get("top_issues")
+    if isinstance(issues, list) and issues:
+        for item in issues:
+            if not isinstance(item, dict):
+                continue
+            prefix = f"{item.get('rank')}. [{item.get('severity')}]"
+            category = f" `{item.get('category')}`" if item.get("category") else ""
+            path = f" (`{item.get('path')}`)" if item.get("path") else ""
+            lines.append(f"{prefix}{category} {item.get('message')}{path}")
+    else:
+        lines.append("No open issues in the source audit report.")
+
+    lines += ["", "## File highlights", ""]
+    if isinstance(files, dict):
+        lines.append(f"- Files scored: {files.get('scored')}")
+        lines.append(f"- Average file score: {files.get('average_score')}/100")
+        for label, key in (("Top files", "top"), ("Needs attention", "attention")):
+            rows = files.get(key)
+            if isinstance(rows, list) and rows:
+                lines += ["", f"### {label}", ""]
+                for item in rows:
+                    if not isinstance(item, dict):
+                        continue
+                    lines.append(f"- `{item.get('path')}`: {item.get('score')}/100 ({item.get('band')})")
+
+    lines += [
+        "",
+        "## Verification",
+        "",
+        f"- Exporter: `{dashboard.get('tool', {}).get('name')} {dashboard.get('tool', {}).get('version')}`",
+        f"- Source tool: `{source.get('tool_name')} {source.get('tool_version')}`",
+        f"- Categories: {verification.get('categories_passed')}/{verification.get('categories_total')} passed",
+        f"- Findings: {verification.get('findings')}",
+        f"- Warnings: {verification.get('warnings')}",
+        f"- Suppressed findings: {verification.get('suppressed_findings')}",
+        f"- Deterministic: {verification.get('deterministic')}",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def build_context_pack(root: Union[str, Path], max_bytes: int = 24000) -> str:
     root = Path(root).resolve()
     result = audit(root)
     important = [

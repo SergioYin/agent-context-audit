@@ -3,15 +3,19 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Optional
 
 from .scanner import (
     apply_baseline_suppression,
     audit,
     build_context_pack,
     compare_reports,
+    export_dashboard_report,
     load_json_report,
     render_compare_json,
     render_compare_text,
+    render_dashboard_json,
+    render_dashboard_markdown,
     render_json,
     render_json_report,
     render_markdown,
@@ -55,6 +59,23 @@ def cmd_compare(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_export_dashboard(args: argparse.Namespace) -> int:
+    report = load_json_report(args.report)
+    dashboard = export_dashboard_report(
+        report,
+        source_path=args.report,
+        issue_limit=args.issue_limit,
+        file_limit=args.file_limit,
+    )
+    output = render_dashboard_markdown(dashboard) if args.format == "markdown" else render_dashboard_json(dashboard)
+    if args.write:
+        Path(args.write).write_text(output, encoding="utf-8")
+        print(f"Wrote dashboard export: {args.write}")
+    else:
+        print(output)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="agent-context-audit",
@@ -82,10 +103,18 @@ def build_parser() -> argparse.ArgumentParser:
     compare_p.add_argument("--format", choices=["json", "text"], default="json")
     compare_p.add_argument("--write", help="Write output to a file instead of stdout")
     compare_p.set_defaults(func=cmd_compare)
+
+    dashboard_p = sub.add_parser("export-dashboard", help="Convert audit JSON into compact dashboard-ready output")
+    dashboard_p.add_argument("report", help="Audit JSON report to summarize")
+    dashboard_p.add_argument("--format", choices=["json", "markdown"], default="json")
+    dashboard_p.add_argument("--write", help="Write output to a file instead of stdout")
+    dashboard_p.add_argument("--issue-limit", type=int, default=5, help="Maximum top issues to include")
+    dashboard_p.add_argument("--file-limit", type=int, default=5, help="Maximum files per highlight list")
+    dashboard_p.set_defaults(func=cmd_export_dashboard)
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:

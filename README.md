@@ -26,6 +26,7 @@ Then it can generate:
 
 - a Markdown readiness report
 - JSON output for automation, including native per-file scores
+- compact dashboard exports with score bands, top issues, file highlights, and verification metadata
 - a compact `AGENT_CONTEXT.md` bundle with tree, detected commands, key excerpts, and suggested next edits
 
 
@@ -115,6 +116,15 @@ For a concise human-readable summary:
 python -m agent_context_audit compare /tmp/baseline.json /tmp/current.json --format text
 ```
 
+Export dashboard-ready summaries from saved audit JSON:
+
+```bash
+python -m agent_context_audit export-dashboard /tmp/agent-context-audit.json --write /tmp/agent-context-dashboard.json
+python -m agent_context_audit export-dashboard /tmp/agent-context-audit.json --format markdown --write /tmp/agent-context-dashboard.md
+```
+
+The `export-dashboard` command consumes an audit JSON report and emits a compact deterministic artifact. JSON is the default format. The export includes `dashboard_schema`, `score` with score-band metadata, ranked `top_issues`, `files.top`, `files.attention`, and `verification` metadata such as source tool version, category counts, finding counts, and whether suppressed findings were present.
+
 Read the score from JSON in a script or shell pipeline:
 
 ```bash
@@ -124,6 +134,8 @@ python -c "import json,sys; print(json.load(open(sys.argv[1]))['overall_score'])
 Useful stable JSON keys include `tool`, `scanned_root`, `overall_score`, `grade`, `status`, `categories`, `files`, `file_summary`, `findings`, `recommendations`, `generated_context_pack_path`, `counts`, and `summary`. Each `files` entry includes `path`, `score`, `max_score`, `size_bytes`, `text`, `matched_signals`, `strengths`, and `issues`, making the output suitable for compare tools, dashboards, and trend storage. When `--baseline` is supplied, output also includes `baseline` and `suppressed_findings`; `baseline` contains `baseline_path`, `suppressed_count`, `new_issue_count`, and per-file counts when findings include paths.
 
 Useful stable comparison keys include `baseline`, `current`, `score_delta`, `changed_file_count`, `added_file_count`, `removed_file_count`, `added_files`, `removed_files`, `files_improved`, `files_regressed`, and `rule_issue_count_deltas`.
+
+Useful stable dashboard keys include `dashboard_schema`, `source`, `score`, `top_issues`, `files`, and `verification`.
 
 ## Example output
 
@@ -169,6 +181,8 @@ python -m agent_context_audit pack . --out /tmp/AGENT_CONTEXT.md
 python -m agent_context_audit audit . --format json --write /tmp/agent-context-audit-current.json
 python -m agent_context_audit audit . --format json --baseline /tmp/agent-context-audit-current.json
 python -m agent_context_audit compare /tmp/agent-context-audit-current.json /tmp/agent-context-audit-current.json
+python -m agent_context_audit export-dashboard /tmp/agent-context-audit-current.json --write /tmp/agent-context-dashboard.json
+python -m agent_context_audit export-dashboard /tmp/agent-context-audit-current.json --format markdown --write /tmp/agent-context-dashboard.md
 ```
 
 ## License
